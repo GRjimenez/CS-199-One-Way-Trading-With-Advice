@@ -1,5 +1,12 @@
 import pandas as pd
 from threat_based import BaseThreatTrader
+from bounded_advice_trader import BoundedAdviceTrader
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def get_path(filename):
+    return os.path.join(BASE_DIR, filename)
 
 def run_simulation(file_path, price_col, name):
     print(f"\n{'='*50}")
@@ -26,7 +33,14 @@ def run_simulation(file_path, price_col, name):
     print(f"  M (Ceiling)    : {M_max}")
     
     # 3. Initialize the Algorithm (imported from threat_based.py)
-    trader = BaseThreatTrader(n=n_days, m=m_min, M=M_max)
+    trader = BoundedAdviceTrader(
+        n=n_days,
+        m=m_min,
+        M=M_max,
+        advice_block=3,     # which interval (0-based)
+        k_bits=3,           # 3-bit advice → 8 intervals
+        lambda_trust=0.4    # trust level
+    )
     print(f"  Calculated 'c' : {trader.c:.4f}")
     
     # 4. Run the Trading Loop
@@ -62,8 +76,8 @@ if __name__ == "__main__":
         name='EUR/USD (10 Years)'
     )
     # In your runner.py, at the bottom:
-    run_simulation('test_1_scared.csv', 'Close/Last', 'Test 1: Scared Hold')
-    run_simulation('test_2_perfect_peak.csv', 'Close/Last', 'Test 2: Perfect Peak')
-    run_simulation('test_3_staircase.csv', 'Close/Last', 'Test 3: Staircase')
-    run_simulation('test_4_dip_rule1.csv', 'Close/Last', 'Test 4: Dip & Rule 1')
-    run_simulation('test_5_stable.csv', 'Close/Last', 'Test 5: Stable Market')
+    run_simulation(get_path('test_1_scared.csv'), 'Close/Last', 'Test 1: Scared Hold')
+    run_simulation(get_path('test_2_perfect_peak.csv'), 'Close/Last', 'Test 2: Perfect Peak')
+    run_simulation(get_path('test_3_staircase.csv'), 'Close/Last', 'Test 3: Staircase')
+    run_simulation(get_path('test_4_dip_rule1.csv'), 'Close/Last', 'Test 4: Dip & Rule 1')
+    run_simulation(get_path('test_5_stable.csv'), 'Close/Last', 'Test 5: Stable Market')
