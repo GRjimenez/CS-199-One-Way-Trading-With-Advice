@@ -74,9 +74,10 @@ class BoundedAdviceTrader:
 
         # Last day rule
         if day_index == self.n:
-            trade_amt += self.robust_shares
-            action = "SELL_ALL (Last Day)"
+            trade_amt += self.advice_shares + self.robust_shares
+            self.advice_shares = 0.0
             self.robust_shares = 0.0
+            action = "SELL_ALL (Last Day)"
 
         elif is_new_max and self.robust_shares > 0:
 

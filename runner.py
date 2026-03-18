@@ -16,6 +16,10 @@ def run_simulation(file_path, price_col, name):
     # 1. Load the cleaned CSV Data
     try:
         df = pd.read_csv(file_path)
+        # Remove dollar signs and convert to float
+        for col in ['Close/Last', 'Low', 'High']:
+            df[col] = df[col].replace('[\$,]', '', regex=True).astype(float)
+        df = df.head(365)
     except FileNotFoundError:
         print(f"Error: Could not find {file_path}")
         return
@@ -64,20 +68,20 @@ if __name__ == "__main__":
     
     # Run Dataset 1: Apple
     run_simulation(
-        file_path='cleaned_HistoricalData_1771208929614.csv', 
-        price_col='Close/Last', 
-        name='Apple Stock (10 Years)'
+        file_path=get_path('AppleData.csv'),
+        price_col='Close/Last',
+        name='Apple Dataset (10 day Test)'
     )
     
     # Run Dataset 2: EUR/USD
-    run_simulation(
-        file_path='cleaned_EUR_USD Historical Data (1).csv', 
-        price_col='Price', 
-        name='EUR/USD (10 Years)'
-    )
+    #run_simulation(
+    #    file_path=get_path('EUR_USD.csv'),
+    #    price_col='Price',
+    #    name='EUR USD Dataset (10 day Test)'
+    #)
     # In your runner.py, at the bottom:
-    run_simulation(get_path('test_1_scared.csv'), 'Close/Last', 'Test 1: Scared Hold')
-    run_simulation(get_path('test_2_perfect_peak.csv'), 'Close/Last', 'Test 2: Perfect Peak')
-    run_simulation(get_path('test_3_staircase.csv'), 'Close/Last', 'Test 3: Staircase')
-    run_simulation(get_path('test_4_dip_rule1.csv'), 'Close/Last', 'Test 4: Dip & Rule 1')
-    run_simulation(get_path('test_5_stable.csv'), 'Close/Last', 'Test 5: Stable Market')
+    #run_simulation(get_path('test_1_scared.csv'), 'Close/Last', 'Test 1: Scared Hold')
+    #run_simulation(get_path('test_2_perfect_peak.csv'), 'Close/Last', 'Test 2: Perfect Peak')
+    #run_simulation(get_path('test_3_staircase.csv'), 'Close/Last', 'Test 3: Staircase')
+    #run_simulation(get_path('test_4_dip_rule1.csv'), 'Close/Last', 'Test 4: Dip & Rule 1')
+    #run_simulation(get_path('test_5_stable.csv'), 'Close/Last', 'Test 5: Stable Market')
