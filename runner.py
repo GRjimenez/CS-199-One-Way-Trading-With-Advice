@@ -1,69 +1,96 @@
+# runner.py
 import pandas as pd
-from threat_based import BaseThreatTrader
+import numpy as np
+from maximum_forecast import BaseThreatTrader
+from machine_learning import MaxPricePredictor
 
-def run_simulation(file_path, price_col, name):
+def load_and_preprocess(file_path, price_col='Close/Last'):
+    df = pd.read_csv(file_path)
+    df = df.iloc[::-1].reset_index(drop=True)
+    df[price_col] = df[price_col].str.replace(r'[\$,]', '', regex=True).astype(float)
+    df['Date'] = pd.to_datetime(df['Date'])
+    df['Low'] = df['Low'].str.replace(r'[\$,]', '', regex=True).astype(float)
+    df['High'] = df['High'].str.replace(r'[\$,]', '', regex=True).astype(float)
+    return df
+
+def run_simulation(file_path, price_col, name, ml_predictor=None, lambda_val=0.5):
     print(f"\n{'='*50}")
     print(f" RUNNING SIMULATION: {name}")
     print(f"{'='*50}")
-    
-    # 1. Load the cleaned CSV Data
-    try:
-        df = pd.read_csv(file_path)
-    except FileNotFoundError:
-        print(f"Error: Could not find {file_path}")
-        return
-    
-    # 2. Extract the inputs required by the algorithm
+
+    df = load_and_preprocess(file_path, price_col)
     n_days = len(df)
-    m_min = df['Low'].min()      # Global minimum floor
-    M_max = df['High'].max()     # Global maximum ceiling
-    prices = df[price_col].values # Sequence of daily closing prices
-    dates = df['Date'].values
-    
+    m_min = df['Low'].min()
+    M_max = df['High'].max()
+    prices = df[price_col].values
+    dates = df['Date'].dt.strftime('%m/%d/%Y').values
+
     print("--- Inputs ---")
     print(f"  n (Total Days) : {n_days}")
     print(f"  m (Floor)      : {m_min}")
     print(f"  M (Ceiling)    : {M_max}")
-    
-    # 3. Initialize the Algorithm (imported from threat_based.py)
-    trader = BaseThreatTrader(n=n_days, m=m_min, M=M_max)
+
+    trader = BaseThreatTrader(n=n_days, m=m_min, M=M_max, lambda_val=lambda_val, ml_predictor=ml_predictor)
     print(f"  Calculated 'c' : {trader.c:.4f}")
-    
-    # 4. Run the Trading Loop
+
+    # Run trading loop
+    window_size = 10
     for i in range(n_days):
-        trader.trade(current_price=prices[i], day_index=i+1, date_str=dates[i])
-        
-    # 5. Output Results
+        past_window = prices[max(0, i-window_size+1):i+1]
+        past_window = np.pad(past_window, (window_size - len(past_window), 0), 'edge')
+        trader.trade(
+            current_price=prices[i],
+            day_index=i+1,
+            date_str=dates[i],
+            past_window=past_window
+        )
+
     print("\n--- Results ---")
     print(f"  Final Cash     : ${trader.cash:,.2f}")
     print(f"  Optimal Cash   : ${M_max * 100:,.2f} (If sold 100 shares at absolute peak)")
-    
-    # 6. Show the days where it actually made a trade
+
     trades_df = pd.DataFrame(trader.trades)
-    active_trades = trades_df[trades_df['Action'] != 'HOLD']
-    
+    active_trades = trades_df[trades_df['Sold'] > 0]
     print(f"\n--- Trade Log ({len(active_trades)} Active Trades) ---")
     print(active_trades.to_string(index=False))
+    return trader.cash
 
-# === MAIN EXECUTION ===
 if __name__ == "__main__":
-    
-    # Run Dataset 1: Apple
-    run_simulation(
-        file_path='cleaned_HistoricalData_1771208929614.csv', 
-        price_col='Close/Last', 
-        name='Apple Stock (10 Years)'
-    )
-    
-    # Run Dataset 2: EUR/USD
-    run_simulation(
-        file_path='cleaned_EUR_USD Historical Data (1).csv', 
-        price_col='Price', 
-        name='EUR/USD (10 Years)'
-    )
-    # In your runner.py, at the bottom:
-    run_simulation('test_1_scared.csv', 'Close/Last', 'Test 1: Scared Hold')
-    run_simulation('test_2_perfect_peak.csv', 'Close/Last', 'Test 2: Perfect Peak')
-    run_simulation('test_3_staircase.csv', 'Close/Last', 'Test 3: Staircase')
-    run_simulation('test_4_dip_rule1.csv', 'Close/Last', 'Test 4: Dip & Rule 1')
-    run_simulation('test_5_stable.csv', 'Close/Last', 'Test 5: Stable Market')
+    train_file = "AppleData_2016-2023.csv"
+    test_files = ["AppleData_2024.csv", "AppleData_2025.csv", "AppleData_2026.csv"]
+
+    # Train ML predictor
+    train_df = load_and_preprocess(train_file)
+    ml_predictor = MaxPricePredictor(n_future_days=10)
+    ml_predictor.fit(train_df)
+
+    import matplotlib.pyplot as plt
+
+    lambda_values = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    results = {}
+
+    for test_file in test_files:
+        cash_results = []
+        for lam in lambda_values:
+            final_cash = run_simulation(
+                file_path=test_file,
+                price_col='Close/Last',
+                name=f"{test_file} (λ={lam})",
+                ml_predictor=ml_predictor,
+                lambda_val=lam
+            )
+            cash_results.append(final_cash)
+        results[test_file] = cash_results
+
+    plt.figure(figsize=(10, 6))
+
+    for file_name, cash_values in results.items():
+        plt.plot(lambda_values, cash_values, marker='o', label=file_name)
+
+    plt.title("Final Cash vs Lambda Value")
+    plt.xlabel("Lambda (λ)")
+    plt.ylabel("Final Cash ($)")
+    plt.xticks(lambda_values)
+    plt.grid(True)
+    plt.legend()
+    plt.show()
