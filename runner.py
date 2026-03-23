@@ -124,12 +124,6 @@ if __name__ == "__main__":
     df = prepare_df(file_path, price_col)
     if df is None:
         raise SystemExit(1)
-        
-    # CRITICAL: Extract the absolute Global Bounds from the entire dataset first
-    # The algorithm needs to know the absolute minimum and maximum possible values 
-    # to calculate its formulas, even when it is only trading a 1-year slice.
-    global_m = df[price_col].min()
-    global_M = df[price_col].max()
 
     # ==========================================
     # 1. SIMULATION: FIRST 10 DAYS
@@ -138,8 +132,13 @@ if __name__ == "__main__":
     df_10 = df.iloc[:k_days].reset_index(drop=True) if len(df) >= k_days else df.copy()
     label_10 = f"{dataset_name} — First {min(k_days, len(df))} Day(s)"
     
-    run_base_simulation_df(df_10, price_col, label_10, global_m, global_M)
-    run_one_bit_simulation_df(df_10, price_col, label_10, global_m, global_M)
+    # THE FIX: Calculate a realistic local horizon instead of using the 10-year global max.
+    # For a tiny 10-day window, we assume a realistic maximum volatility of a 20% jump.
+    local_m_10 = df_10[price_col].min()
+    assumed_M_10 = local_m_10 * 1.20 
+    
+    run_base_simulation_df(df_10, price_col, label_10, local_m_10, assumed_M_10)
+    run_one_bit_simulation_df(df_10, price_col, label_10, local_m_10, assumed_M_10)
 
     # ==========================================
     # 2. SIMULATIONS: FIRST 1, 2, AND 3 YEARS
@@ -156,8 +155,14 @@ if __name__ == "__main__":
             df_slice = df[df['Date'].dt.year.isin(years_slice)].reset_index(drop=True)
             label_yr = f"{dataset_name} — First {k} Year(s) ({years_slice[0]}-{years_slice[-1]})"
             
-            # Run both algorithms back-to-back for direct comparison
-            run_base_simulation_df(df_slice, price_col, label_yr, global_m, global_M)
-            run_one_bit_simulation_df(df_slice, price_col, label_yr, global_m, global_M)
+            # THE FIX: Create a realistic local horizon
+            local_m = df_slice[price_col].min()
+            
+            # For multi-year runs, assuming the stock could jump 2.5x (150%) is a realistic ceiling
+            assumed_M = local_m * 2.5 
+            
+            # Run both algorithms back-to-back using the realistic assumed bounds
+            run_base_simulation_df(df_slice, price_col, label_yr, local_m, assumed_M)
+            run_one_bit_simulation_df(df_slice, price_col, label_yr, local_m, assumed_M)
     else:
         print("Error: Could not parse dates to run yearly simulations.")
