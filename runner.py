@@ -67,10 +67,18 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     lambda_values = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-    results = {}
+    results_cash = {}   # Final cash results
+    results_ratio = {}  # Competitive ratio results
 
     for test_file in test_files:
         cash_results = []
+        ratio_results = []
+
+        # Preload to compute optimal cash
+        df = load_and_preprocess(test_file)
+        M_max = df['High'].max()
+        optimal_cash = M_max * 100  # max achievable cash
+
         for lam in lambda_values:
             final_cash = run_simulation(
                 file_path=test_file,
@@ -79,17 +87,32 @@ if __name__ == "__main__":
                 ml_predictor=ml_predictor,
                 lambda_val=lam
             )
+
             cash_results.append(final_cash)
-        results[test_file] = cash_results
+            ratio_results.append(optimal_cash / final_cash)  # competitive ratio
 
+        results_cash[test_file] = cash_results
+        results_ratio[test_file] = ratio_results
+
+    # ---- Plot 1: Final Cash vs Lambda ----
     plt.figure(figsize=(10, 6))
-
-    for file_name, cash_values in results.items():
+    for file_name, cash_values in results_cash.items():
         plt.plot(lambda_values, cash_values, marker='o', label=file_name)
-
     plt.title("Final Cash vs Lambda Value")
     plt.xlabel("Lambda (λ)")
     plt.ylabel("Final Cash ($)")
+    plt.xticks(lambda_values)
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+    # ---- Plot 2: Competitive Ratio vs Lambda ----
+    plt.figure(figsize=(10, 6))
+    for file_name, ratio_values in results_ratio.items():
+        plt.plot(lambda_values, ratio_values, marker='o', label=file_name)
+    plt.title("Competitive Ratio (Optimal / Final Cash) vs Lambda")
+    plt.xlabel("Lambda (λ)")
+    plt.ylabel("Optimal Cash / Final Cash (Competitive Ratio)")
     plt.xticks(lambda_values)
     plt.grid(True)
     plt.legend()
