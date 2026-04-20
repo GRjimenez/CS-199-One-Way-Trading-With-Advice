@@ -1,7 +1,7 @@
 import pandas as pd
 import math
 from threat_based import BaseThreatTrader
-from one_bit_advice import OneBitTwoSearchTrader
+from k_bit_advice import KBitThreatTrader
 
 def prepare_df(file_path, price_col):
     try:
@@ -31,7 +31,7 @@ def prepare_df(file_path, price_col):
 
 def run_base_simulation_df(df, price_col, name, global_m, global_M):
     print(f"\n{'='*50}")
-    print(f" BASE SIMULATION: {name}")
+    print(f" BASE SIMULATION (0-BIT): {name}")
     print(f"{'='*50}")
 
     if df is None or len(df) == 0:
@@ -44,8 +44,8 @@ def run_base_simulation_df(df, price_col, name, global_m, global_M):
 
     print("--- Inputs ---")
     print(f"  n (Total Days) : {n_days}")
-    print(f"  m (Global Floor)   : {global_m}")
-    print(f"  M (Global Ceiling) : {global_M}")
+    print(f"  m (Global Floor)   : ${global_m:.2f}")
+    print(f"  M (Global Ceiling) : ${global_M:.2f}")
 
     trader = BaseThreatTrader(n=n_days, m=global_m, M=global_M)
     print(f"  Calculated 'c' : {trader.c:.4f}")
@@ -66,9 +66,9 @@ def run_base_simulation_df(df, price_col, name, global_m, global_M):
     print(f"\n--- Trade Log ({len(active_trades)} Active Trades) ---")
     print(active_trades.to_string(index=False))
 
-def run_one_bit_simulation_df(df, price_col, name, global_m, global_M):
+def run_k_bit_simulation_df(df, price_col, name, global_m, global_M, k_bits):
     print(f"\n{'='*50}")
-    print(f" 1-BIT ADVICE SIMULATION: {name}")
+    print(f" {k_bits}-BIT ADVICE SIMULATION: {name}")
     print(f"{'='*50}")
 
     if df is None or len(df) == 0:
@@ -79,31 +79,37 @@ def run_one_bit_simulation_df(df, price_col, name, global_m, global_M):
     prices = df[price_col].values
     dates = df['Date'].astype(str).values if 'Date' in df.columns else ["" for _ in range(n_days)]
 
-    # 1. Oracle determines the actual max of THIS specific time period
+    # ==========================================
+    # ORACLE LOGIC
+    # ==========================================
     actual_slice_max = df[price_col].max()
+    num_intervals = 2 ** k_bits
+    ratio = global_M / global_m
+    
+    advice_index = 0
+    # Determine which geometric slice contains the actual max
+    for i in range(num_intervals):
+        upper_bound = global_m * (ratio ** ((i + 1) / num_intervals))
+        # If the actual max is less than or equal to the upper bound of this slice
+        # (or if it's the very top slice, to catch edge cases)
+        if actual_slice_max <= upper_bound or i == num_intervals - 1:
+            advice_index = i
+            break
 
-    # 2. Oracle calculates the threshold based on GLOBAL bounds
-    threshold = math.sqrt(global_M * global_m)
-
-    # 3. Oracle provides advice (1 if period max crosses threshold, 0 if it doesn't)
-    advice_bit = 1 if actual_slice_max >= threshold else 0
+    # Initialize trader with the advice index
+    trader = KBitThreatTrader(n=n_days, m=global_m, M=global_M, k_bits=k_bits, advice_index=advice_index)
 
     print("--- Inputs ---")
     print(f"  n (Total Days) : {n_days}")
-    print(f"  Calculated Threshold: ${threshold:.2f}")
     print(f"  Actual Period Max   : ${actual_slice_max:.2f}")
-    print(f"  Advice Bit Given    : {advice_bit}")
-
-    # Initialize trader with the advice bit
-    trader = OneBitTwoSearchTrader(n=n_days, m=global_m, M=global_M, advice_bit=advice_bit)
-
-    print("\n--- Reservation Targets ---")
-    print(f"  Target 1: ${trader.r_prices[0]:.2f}")
-    print(f"  Target 2: ${trader.r_prices[1]:.2f}")
+    print(f"  Advice Bit Index    : {advice_index} (Binary: {bin(advice_index)[2:].zfill(k_bits)})")
+    print(f"  Oracle Shrunk 'm'   : ${trader.m:.2f} (from ${global_m:.2f})")
+    print(f"  Oracle Shrunk 'M'   : ${trader.M:.2f} (from ${global_M:.2f})")
+    print(f"  New Calculated 'c'  : {trader.c:.4f}")
 
     # Run Trading Loop
     for i in range(n_days):
-        trader.trade(current_price=prices[i], day_index=i+1, n_days=n_days, date_str=dates[i])
+        trader.trade(current_price=prices[i], day_index=i+1, date_str=dates[i])
 
     print("\n--- Results ---")
     print(f"  Final Cash     : ${trader.cash:,.2f}")
@@ -114,7 +120,6 @@ def run_one_bit_simulation_df(df, price_col, name, global_m, global_M):
 
     print(f"\n--- Trade Log ({len(active_trades)} Active Trades) ---")
     print(active_trades.to_string(index=False))
-
 
 if __name__ == "__main__":
     file_path = 'HistoricalData_1773022846406.csv'
@@ -132,12 +137,13 @@ if __name__ == "__main__":
     df_10 = df.iloc[:k_days].reset_index(drop=True) if len(df) >= k_days else df.copy()
     label_10 = f"{dataset_name} — First {min(k_days, len(df))} Day(s)"
     
-    # THE ACADEMIC FIX (Choice B): Find the true, exact bounds of this specific 10-day slice
+    # Find the true, exact bounds of this specific 10-day slice
     local_m_10 = df_10[price_col].min()
     local_M_10 = df_10[price_col].max()
     
     run_base_simulation_df(df_10, price_col, label_10, local_m_10, local_M_10)
-    run_one_bit_simulation_df(df_10, price_col, label_10, local_m_10, local_M_10)
+    for bits in [1, 2, 3]:
+        run_k_bit_simulation_df(df_10, price_col, label_10, local_m_10, local_M_10, k_bits=bits)
 
     # ==========================================
     # 2. SIMULATIONS: FIRST 1, 2, AND 3 YEARS
@@ -154,12 +160,13 @@ if __name__ == "__main__":
             df_slice = df[df['Date'].dt.year.isin(years_slice)].reset_index(drop=True)
             label_yr = f"{dataset_name} — First {k} Year(s) ({years_slice[0]}-{years_slice[-1]})"
             
-            # THE ACADEMIC FIX (Choice B): Find the true, exact bounds of this specific multi-year slice
+            # Find the true, exact bounds of this specific multi-year slice
             local_m = df_slice[price_col].min()
             local_M = df_slice[price_col].max()
             
-            # Feed the true bounds into the algorithm to test its theoretical behavior
+            # Run the baseline, then automatically loop through 1, 2, and 3 bits of advice
             run_base_simulation_df(df_slice, price_col, label_yr, local_m, local_M)
-            run_one_bit_simulation_df(df_slice, price_col, label_yr, local_m, local_M)
+            for bits in [1, 2, 3]:
+                run_k_bit_simulation_df(df_slice, price_col, label_yr, local_m, local_M, k_bits=bits)
     else:
         print("Error: Could not parse dates to run yearly simulations.")
