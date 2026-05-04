@@ -26,7 +26,12 @@ COLOURS = {
     0: "#6c757d",          # grey   
     1: "#2196F3",          # blue   
     2: "#FF9800",          # orange 
-    3: "#4CAF50",          # green  
+    3: "#4CAF50",          # green
+    4: "#9C27B0",   # purple — 4-bit
+    5: "#F44336",   # red    — 5-bit
+    6: "#00BCD4",   # cyan   — 6-bit
+    7: "#795548",   # brown  — 7-bit
+    8: "#8BC34A",   # light green — 8-bit  
     "opt": "#E91E63",      # pink   
     "price": "#1a1a2e",    # dark navy 
 }
@@ -213,7 +218,7 @@ def plot_cr_trend(slice_labels, cr_by_alg, k_bits_list, filename):
     ax.set_xticks(x)
     ax.set_xticklabels(slice_labels, rotation=25, ha="right", fontsize=9)
     ax.set_ylabel("Competitive Ratio (OPT / ALG) — lower is better", fontsize=11)
-    ax.set_title("Competitive Ratio vs Trading Horizon\nApple Stock Comparison", fontsize=13, fontweight="bold", pad=12)
+    ax.set_title("Competitive Ratio vs Trading Horizon\nUSD - PHP Comparison", fontsize=13, fontweight="bold", pad=12)
     
     # Put legend outside to avoid cluttering lines
     ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9, framealpha=0.9)
@@ -309,14 +314,14 @@ def run_simulation(df, price_col, label, k_bits_list, slug):
 # =============================================================================
 
 if __name__ == "__main__":
-    FILE_PATH = "HistoricalData_1773022846406.csv"
+    FILE_PATH = "USD_PHP.csv"
     PRICE_COL = "Close/Last"
-    NAME      = "Apple Stock"
+    NAME      = "USD -> PHP"
     
     # Define EXACTLY which algorithms to run
     # (Reduced down to strictly run the Threat-Based algorithms)
     K_BITS = [
-        "THREAT_0", "THREAT_1", "THREAT_2", "THREAT_3"
+        "THREAT_0", "THREAT_1", "THREAT_2", "THREAT_3", "THREAT_4", "THREAT_5", "THREAT_6", "THREAT_7", "THREAT_8"
     ]
 
     print(__doc__) 
@@ -337,7 +342,7 @@ if __name__ == "__main__":
     # Year Slices
     if "Date" in df.columns:
         years = sorted(df["Date"].dt.year.dropna().unique())
-        for k_yr in range(1, min(4, len(years) + 1)):
+        for k_yr in range(1, min(6, len(years) + 1)):
             yr_slice = years[:k_yr]
             slug = f"apple_{k_yr}yr"
             cr_results = run_simulation(df[df["Date"].dt.year.isin(yr_slice)].reset_index(drop=True), PRICE_COL, f"{NAME} — {k_yr} Year(s)", K_BITS, slug)
