@@ -3,8 +3,6 @@ runner.py
 =========
 Tests k-bit geometric-partitioning advice on:
 1. Threat-Based (Deterministic, Time-Aware)
-2. EXPO (Deterministic Fractional, Time-Blind)
-3. Randomized EXPO (100-run average expected value, Time-Blind)
 """
 
 import math
@@ -18,8 +16,7 @@ import matplotlib.pyplot as plt
 # ── IMPORTS ──
 from threat_based import BaseThreatTrader  
 from k_bit_advice import KBitThreatTrader
-from expo_trader import ExpoTrader
-from randomized_expo import RandomizedExpoTrader
+
 
 CHART_DIR = "charts"
 os.makedirs(CHART_DIR, exist_ok=True)
@@ -317,10 +314,9 @@ if __name__ == "__main__":
     NAME      = "Apple Stock"
     
     # Define EXACTLY which algorithms to run
+    # (Reduced down to strictly run the Threat-Based algorithms)
     K_BITS = [
-        "THREAT_0", "THREAT_1", "THREAT_2", "THREAT_3",
-        "EXPO_0", "EXPO_1", "EXPO_2", "EXPO_3",
-        "RAND_EXPO_0", "RAND_EXPO_1", "RAND_EXPO_2", "RAND_EXPO_3"
+        "THREAT_0", "THREAT_1", "THREAT_2", "THREAT_3"
     ]
 
     print(__doc__) 
