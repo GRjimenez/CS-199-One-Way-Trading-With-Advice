@@ -139,7 +139,7 @@ def plot_trading_chart(prices, dates, traders_info, opt_day, label, filename):
 
     # ── Top panel: price + sell markers ──
     ax_price.set_facecolor("#ffffff")
-    ax_price.plot(days, prices, color=COLOURS["price"], linewidth=1.5, label="Apple price", zorder=2)
+    ax_price.plot(days, prices, color=COLOURS["price"], linewidth=1.5, label=f"{label} Price", zorder=2)
     ax_price.axvline(x=opt_day, color=COLOURS["opt"], linewidth=2, linestyle="--", alpha=0.8, label=f"OPT day ({opt_day})", zorder=3)
     ax_price.scatter([opt_day], [prices[opt_day - 1]], color=COLOURS["opt"], s=120, zorder=5, marker="*")
 
@@ -314,41 +314,72 @@ def run_simulation(df, price_col, label, k_bits_list, slug):
 # =============================================================================
 
 if __name__ == "__main__":
-    FILE_PATH = "USD_PHP.csv"
-    PRICE_COL = "Close/Last"
-    NAME      = "USD -> PHP"
-    
+    print(__doc__) 
+
     # Define EXACTLY which algorithms to run
-    # (Reduced down to strictly run the Threat-Based algorithms)
     K_BITS = [
-        "THREAT_0", "THREAT_1", "THREAT_2", "THREAT_3", "THREAT_4", "THREAT_5", "THREAT_6", "THREAT_7", "THREAT_8"
+        "THREAT_0", "THREAT_1", "THREAT_2", "THREAT_3", 
+        "THREAT_4", "THREAT_5", "THREAT_6", "THREAT_7", "THREAT_8"
     ]
 
-    print(__doc__) 
-    df = prepare_df(FILE_PATH, PRICE_COL)
-    if df is None: raise SystemExit(1)
+    # ── Define all your datasets here ──
+    DATASETS = [
+        {
+            "file": "HistoricalData_1773022846406.csv",
+            "price_col": "Close/Last",
+            "name": "Apple Stock",
+            "prefix": "apple"
+        },
+        {
+            "file": "USD_PHP.csv",
+            "price_col": "Close/Last", # Ensure this matches your USD_PHP CSV exactly!
+            "name": "USD -> PHP",
+            "prefix": "usd_php"
+        }
+    ]
 
-    all_slice_labels = []
-    all_cr_by_alg = {k: [] for k in K_BITS}
+    # Loop through each dataset and run the full suite
+    for ds in DATASETS:
+        print(f"\n{'*'*90}")
+        print(f"  STARTING DATASET: {ds['name']}")
+        print(f"{'*'*90}")
 
-    # Day Slices
-    for n_days in [10, 30, 60, 90, 180]:
-        if len(df) < n_days: continue
-        slug = f"apple_{n_days}d"
-        cr_results = run_simulation(df.iloc[:n_days].reset_index(drop=True), PRICE_COL, f"{NAME} — {n_days} Days", K_BITS, slug)
-        all_slice_labels.append(f"{n_days}d")
-        for k in K_BITS: all_cr_by_alg[k].append(cr_results.get(k, float("nan")))
+        df = prepare_df(ds['file'], ds['price_col'])
+        if df is None: 
+            print(f"Skipping {ds['name']} due to loading error.")
+            continue
 
-    # Year Slices
-    if "Date" in df.columns:
-        years = sorted(df["Date"].dt.year.dropna().unique())
-        for k_yr in range(1, min(6, len(years) + 1)):
-            yr_slice = years[:k_yr]
-            slug = f"apple_{k_yr}yr"
-            cr_results = run_simulation(df[df["Date"].dt.year.isin(yr_slice)].reset_index(drop=True), PRICE_COL, f"{NAME} — {k_yr} Year(s)", K_BITS, slug)
-            all_slice_labels.append(f"{k_yr}yr")
+        all_slice_labels = []
+        all_cr_by_alg = {k: [] for k in K_BITS}
+
+        # ── Day Slices ──
+        for n_days in [10, 30, 60, 90, 180]:
+            if len(df) < n_days: continue
+            
+            # Dynamic slug replaces the hardcoded "apple_"
+            slug = f"{ds['prefix']}_{n_days}d"
+            
+            cr_results = run_simulation(df.iloc[:n_days].reset_index(drop=True), ds['price_col'], f"{ds['name']} — {n_days} Days", K_BITS, slug)
+            all_slice_labels.append(f"{n_days}d")
             for k in K_BITS: all_cr_by_alg[k].append(cr_results.get(k, float("nan")))
 
-    if all_slice_labels:
-        plot_cr_trend(all_slice_labels, all_cr_by_alg, K_BITS, "cr_trend_all_slices.png")
-        print(f"\nAll charts saved to ./{CHART_DIR}/")
+        # ── Year Slices ──
+        if "Date" in df.columns:
+            years = sorted(df["Date"].dt.year.dropna().unique())
+            for k_yr in range(1, min(6, len(years) + 1)):
+                yr_slice = years[:k_yr]
+                
+                # Dynamic slug replaces the hardcoded "apple_"
+                slug = f"{ds['prefix']}_{k_yr}yr"
+                
+                cr_results = run_simulation(df[df["Date"].dt.year.isin(yr_slice)].reset_index(drop=True), ds['price_col'], f"{ds['name']} — {k_yr} Year(s)", K_BITS, slug)
+                all_slice_labels.append(f"{k_yr}yr")
+                for k in K_BITS: all_cr_by_alg[k].append(cr_results.get(k, float("nan")))
+
+        # ── Trend Chart (Saved specifically for this dataset) ──
+        if all_slice_labels:
+            trend_filename = f"cr_trend_all_slices_{ds['prefix']}.png"
+            plot_cr_trend(all_slice_labels, all_cr_by_alg, K_BITS, trend_filename)
+            print(f"\n[✔] Finished {ds['name']}! Master trend chart saved as {trend_filename}")
+
+    print(f"\nAll datasets processed successfully! Check the ./{CHART_DIR}/ folder.")

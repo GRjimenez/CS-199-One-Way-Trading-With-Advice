@@ -36,22 +36,20 @@ from randomized_expo import RandomizedExpoTrader
 REPORT_DIR = "reports_random"
 os.makedirs(REPORT_DIR, exist_ok=True)
 
-K_BITS_LIST = [0, 1, 2, 3]
+K_BITS_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
 COLOURS = {
-    0: "#6c757d",   # grey
-    1: "#2196F3",   # blue
-    2: "#FF9800",   # orange
-    3: "#4CAF50",   # green
+    0: "#6c757d",   1: "#2196F3",   2: "#FF9800",   3: "#4CAF50",
+    4: "#9C27B0",   5: "#F44336",   6: "#00BCD4",   7: "#795548",   8: "#8BC34A"
 }
 
 LABELS = {
-    0: "EXPO 0-bit (no advice)",
-    1: "EXPO 1-bit advice",
-    2: "EXPO 2-bit advice",
-    3: "EXPO 3-bit advice",
+    0: "EXPO 0-bit (no advice)",  1: "EXPO 1-bit advice",
+    2: "EXPO 2-bit advice",       3: "EXPO 3-bit advice",
+    4: "EXPO 4-bit advice",       5: "EXPO 5-bit advice",
+    6: "EXPO 6-bit advice",       7: "EXPO 7-bit advice",
+    8: "EXPO 8-bit advice",
 }
-
 
 # =============================================================================
 # Helpers
@@ -126,14 +124,21 @@ def run_monte_carlo(prices, m, M, n, k_bits, runs=1000, seed=42):
 
 def plot_distribution(cr_by_k, stats_by_k, label, filename):
     """
-    Side-by-side histogram of CR distributions for each k-bit level.
+    Dynamic grid histogram of CR distributions for each k-bit level.
     Shows mean (dashed) and median (solid) lines.
     """
-    fig = plt.figure(figsize=(16, 10), facecolor="#f8f9fa")
-    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35)
+    # ── THE FIX: Dynamic Grid Sizing ──
+    num_charts = len(K_BITS_LIST)
+    cols = 3 if num_charts > 4 else 2
+    rows = math.ceil(num_charts / cols)
+
+    # Scale the image size dynamically based on columns and rows
+    fig = plt.figure(figsize=(6 * cols, 5 * rows), facecolor="#f8f9fa")
+    gs = gridspec.GridSpec(rows, cols, figure=fig, hspace=0.45, wspace=0.35)
 
     for idx, k in enumerate(K_BITS_LIST):
-        ax = fig.add_subplot(gs[idx // 2, idx % 2])
+        # Dynamically map the 1D index to the 2D grid
+        ax = fig.add_subplot(gs[idx // cols, idx % cols])
         ax.set_facecolor("#ffffff")
 
         crs = cr_by_k[k]
@@ -176,7 +181,7 @@ def plot_distribution(cr_by_k, stats_by_k, label, filename):
                           edgecolor=COLOURS[k], alpha=0.9))
 
     fig.suptitle(f"Randomized EXPO — CR Distribution (1,000 runs)\n{label}",
-                 fontsize=13, fontweight="bold", y=1.01)
+                 fontsize=14, fontweight="bold", y=0.95 + (0.01 * rows))
 
     path = os.path.join(REPORT_DIR, filename)
     plt.savefig(path, dpi=150, bbox_inches="tight", facecolor="#f8f9fa")
@@ -231,10 +236,13 @@ def plot_summary_bars(stats_by_k, label, filename):
     Grouped bar chart: mean CR per k-bit with error bars showing std dev.
     Makes it easy to see both the improvement and the variance reduction.
     """
-    fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f8f9fa")
+    ks = K_BITS_LIST
+    # Widen the chart dynamically if we have a lot of k-bits
+    chart_width = max(10, len(ks) * 1.5)
+    
+    fig, ax = plt.subplots(figsize=(chart_width, 6), facecolor="#f8f9fa")
     ax.set_facecolor("#ffffff")
 
-    ks = K_BITS_LIST
     means = [stats_by_k[k]["mean"] for k in ks]
     stds = [stats_by_k[k]["std"] for k in ks]
     bests = [stats_by_k[k]["best"] for k in ks]
@@ -265,7 +273,7 @@ def plot_summary_bars(stats_by_k, label, filename):
                linewidth=1.5, alpha=0.8, label="OPT (CR = 1.0)")
 
     ax.set_xticks(x)
-    ax.set_xticklabels([LABELS[k] for k in ks], fontsize=9)
+    ax.set_xticklabels([LABELS[k] for k in ks], fontsize=9, rotation=15) # Slight rotation for long labels
     ax.set_ylabel("Mean Competitive Ratio ± Std Dev", fontsize=11)
     ax.set_title(f"Mean CR with Variance by Advice Level\n{label}",
                  fontsize=12, fontweight="bold", pad=12)
@@ -370,43 +378,63 @@ def run_detailed_simulation(df, price_col, label, slug, runs=1000):
 # =============================================================================
 
 if __name__ == "__main__":
-    FILE_PATH = "HistoricalData_1773022846406.csv"
-    PRICE_COL = "Close/Last"
-    NAME      = "Apple Stock"
-    RUNS      = 1000
-
     print(__doc__)
 
-    df = prepare_df(FILE_PATH, PRICE_COL)
-    if df is None:
-        raise SystemExit(1)
+    RUNS = 1000
 
-    # Day-based slices
-    for n_days in [10, 30, 60, 90, 180]:
-        if len(df) < n_days:
+    # ── Define all your datasets here ──
+    DATASETS = [
+        {
+            "file": "HistoricalData_1773022846406.csv",
+            "price_col": "Close/Last",
+            "name": "Apple Stock",
+            "prefix": "apple"
+        },
+        {
+            "file": "USD_PHP.csv",
+            "price_col": "Close/Last", 
+            "name": "USD -> PHP",
+            "prefix": "usd_php"
+        }
+    ]
+
+    # Loop through each dataset and run the full Monte Carlo suite
+    for ds in DATASETS:
+        print(f"\n{'*'*90}")
+        print(f"  STARTING DATASET (MONTE CARLO): {ds['name']}")
+        print(f"{'*'*90}")
+
+        df = prepare_df(ds['file'], ds['price_col'])
+        if df is None:
+            print(f"Skipping {ds['name']} due to loading error.")
             continue
-        run_detailed_simulation(
-            df.iloc[:n_days].reset_index(drop=True),
-            PRICE_COL,
-            f"{NAME} — First {n_days} Days",
-            f"apple_{n_days}d",
-            runs=RUNS,
-        )
 
-    # Yearly slices
-    if "Date" in df.columns and df["Date"].notna().any():
-        years = sorted(df["Date"].dt.year.dropna().unique())
-        for k_yr in range(1, min(4, len(years) + 1)):
-            yr_slice = years[:k_yr]
-            df_yr = df[df["Date"].dt.year.isin(yr_slice)].reset_index(drop=True)
+        # Day-based slices
+        for n_days in [10, 30, 60, 90, 180]:
+            if len(df) < n_days:
+                continue
             run_detailed_simulation(
-                df_yr,
-                PRICE_COL,
-                f"{NAME} — {k_yr} Year(s) ({yr_slice[0]}–{yr_slice[-1]})",
-                f"apple_{k_yr}yr",
+                df.iloc[:n_days].reset_index(drop=True),
+                ds['price_col'],
+                f"{ds['name']} — First {n_days} Days",
+                f"{ds['prefix']}_{n_days}d",
                 runs=RUNS,
             )
 
+        # Yearly slices
+        if "Date" in df.columns and df["Date"].notna().any():
+            years = sorted(df["Date"].dt.year.dropna().unique())
+            for k_yr in range(1, min(6, len(years) + 1)):  # Updated to min(6) to match your other runner
+                yr_slice = years[:k_yr]
+                df_yr = df[df["Date"].dt.year.isin(yr_slice)].reset_index(drop=True)
+                run_detailed_simulation(
+                    df_yr,
+                    ds['price_col'],
+                    f"{ds['name']} — {k_yr} Year(s) ({yr_slice[0]}–{yr_slice[-1]})",
+                    f"{ds['prefix']}_{k_yr}yr",
+                    runs=RUNS,
+                )
+
     print(f"\n{'═'*90}")
-    print(f"  All Monte Carlo analysis complete. Reports saved to ./{REPORT_DIR}/")
+    print(f"  All Monte Carlo analysis complete for all datasets. Reports saved to ./{REPORT_DIR}/")
     print(f"{'═'*90}")
