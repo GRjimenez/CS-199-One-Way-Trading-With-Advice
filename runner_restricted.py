@@ -1,14 +1,26 @@
 """
 runner_restricted.py
 ====================
-Tests "Oracle Robustness" by restricting the oracle's foresight.
-The oracle is only allowed to see the first X months of the dataset
-to generate its advice. The algorithms then trade over the full 
-5-year timeline using that potentially incomplete advice.
+Oracle Robustness Test — how little data does the oracle need to beat
+the no-advice baseline?
 
-Outputs two separate line plots:
-1. Threat-Based Oracle Robustness
-2. Randomized EXPO Oracle Robustness
+Setup:
+    - Full trading period = 5 years (all available data up to 5yr mark)
+    - Baseline = threat-based 0-bit trades the full 5 years (flat line)
+    - k-bit advice = oracle only sees the first X months to pick its
+      sub-interval, then algorithm trades the full 5 years with that advice
+
+    X sweeps from 1 to 60 months (monthly resolution).
+
+    Key question: at which month does partial advice first beat the baseline?
+
+Two separate charts generated:
+    1. Threat-Based Oracle Robustness
+    2. Randomized EXPO Oracle Robustness
+
+Datasets:
+    - Apple Stock (HistoricalData_1773022846406.csv)
+    - USD → PHP   (USD_PHP.csv)
 """
 
 import os
@@ -19,7 +31,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ── IMPORTS ──
 from threat_based import BaseThreatTrader
 from k_bit_advice import KBitThreatTrader
 from randomized_expo import RandomizedExpoTrader
@@ -27,23 +38,28 @@ from randomized_expo import RandomizedExpoTrader
 CHART_DIR = "charts"
 os.makedirs(CHART_DIR, exist_ok=True)
 
-# Colours
+EXPO_RUNS = 1000   # Monte Carlo runs per month/k combo for EXPO
+EXPO_SEED = 42
+
 COLOURS = {
-    "baseline": "#E91E63", # Pink for Baseline (0-bit)
-    1: "#2196F3",          # Blue
-    2: "#FF9800",          # Orange
-    3: "#4CAF50",          # Green
-    4: "#9C27B0",          # Purple
-    8: "#8BC34A",          # Light Green
+    "baseline": "#E91E63",
+    1: "#2196F3",
+    2: "#FF9800",
+    3: "#4CAF50",
+    4: "#9C27B0",
+    8: "#8BC34A",
 }
 
+
 # =============================================================================
-# Oracle (Restricted)
+# Helpers
 # =============================================================================
 
 def oracle_advice_index(restricted_max, global_m, global_M, k_bits):
     """
-    Generates advice based ONLY on the maximum price seen in the restricted window.
+    Returns the sub-interval index based ONLY on the restricted window max.
+    When restricted_max < true_max the advice will be wrong (too low),
+    which is exactly what this experiment tests.
     """
     num_intervals = 2 ** k_bits
     ratio = global_M / global_m
@@ -58,199 +74,323 @@ def prepare_df(file_path, price_col):
     try:
         df = pd.read_csv(file_path)
     except FileNotFoundError:
-        print(f"Error: file not found — {file_path}")
+        print(f"  [!] File not found: {file_path}")
         return None
 
-    # Reverse to chronological order (oldest to newest)
-    df = df.iloc[::-1].reset_index(drop=True)
-    
-    for c in ["Low", "High", "Open", "Close/Last", "Price"]:
+    df = df.iloc[::-1].reset_index(drop=True)   # oldest first
+
+    for c in ["Low", "High", "Open", "Close/Last", "Price", "Close"]:
         if c in df.columns:
             df[c] = df[c].astype(str).str.replace(r"[\$,]", "", regex=True)
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
     df = df.dropna(subset=[price_col])
+
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
     return df
 
+
+def get_5yr_slice(df, price_col):
+    """
+    Return the first 5 years of data using dates if available,
+    otherwise fall back to first 1302 rows (~5yr of trading days).
+    """
+    if "Date" in df.columns and df["Date"].notna().any():
+        start = df["Date"].dropna().iloc[0]
+        end   = start + pd.DateOffset(years=5)
+        df_5yr = df[df["Date"] < end].reset_index(drop=True)
+        if len(df_5yr) > 50:
+            return df_5yr
+
+    # Fallback: ~252 trading days/yr × 5 = 1260; use 1302 to be safe
+    return df.head(min(1302, len(df))).reset_index(drop=True)
+
+
+def month_window_size(month, total_days, total_months=60):
+    """
+    Convert a month index (1–60) to a day count into the dataset.
+    Rounds up so month 1 always has at least 1 day.
+    """
+    days_per_month = total_days / total_months
+    return min(int(math.ceil(month * days_per_month)), total_days)
+
+
 # =============================================================================
-# Plotting Helper
+# Plotting
 # =============================================================================
 
-def plot_robustness_chart(x_months, baseline_cr, results_dict, k_bits_list, title_label, filename):
-    fig, ax = plt.subplots(figsize=(14, 8), facecolor="#f8f9fa") # Slightly larger for better labels
+def plot_robustness_chart(x_months, baseline_cr, results_dict,
+                          k_bits_list, title, filename,
+                          annotate_drops=False):
+    fig, ax = plt.subplots(figsize=(14, 8), facecolor="#f8f9fa")
     ax.set_facecolor("#ffffff")
 
-    # 1. OPT Line (CR=1.0)
-    ax.axhline(1.0, color="#1a1a2e", linewidth=2.5, linestyle=":", alpha=0.8, label="Optimal (CR=1.0)")
+    # ── OPT reference ────────────────────────────────────────────────────────
+    ax.axhline(1.0, color="#1a1a2e", linewidth=2.0,
+               linestyle=":", alpha=0.7, label="Optimal (CR = 1.0)", zorder=2)
 
-    # 2. Shaded Region for "Advice Beats Baseline"
-    # Shade the area between the perfect 1.0 and the baseline CR
-    ax.axhspan(1.0, baseline_cr, facecolor="#4CAF50", alpha=0.08, label="Advice Beats Baseline")
+    # ── Shaded region where advice BEATS baseline ─────────────────────────────
+    # Shade BELOW the baseline (where CR is lower = better)
+    ax.axhspan(1.0, baseline_cr, facecolor="#4CAF50",
+               alpha=0.07, label="_nolegend_", zorder=1)
 
-    # Plot Baseline
-    ax.axhline(baseline_cr, color=COLOURS["baseline"], linewidth=3, linestyle="--", 
+    # ── Baseline flat line ────────────────────────────────────────────────────
+    ax.axhline(baseline_cr, color=COLOURS["baseline"], linewidth=2.5,
+               linestyle="--", zorder=3,
                label=f"Baseline 0-Bit (CR: {baseline_cr:.3f})")
 
-    max_plotted_val = baseline_cr
+    # ── k-bit advice lines ────────────────────────────────────────────────────
+    all_vals = [baseline_cr, 1.0]
 
-    # Plot each k-bit level
     for k in k_bits_list:
         y_vals = results_dict[k]
-        line_color = COLOURS.get(k, "#000")
-        
-        ax.plot(x_months, y_vals, color=line_color, linewidth=2.5, 
-                label=f"{k}-Bit Advice", alpha=0.9)
-        
-        # 3. Dynamic Scaling Fix (Find the highest actual value to prevent clipping)
-        valid_vals = [v for v in y_vals if v != float('inf') and not math.isnan(v)]
-        if valid_vals:
-            max_plotted_val = max(max_plotted_val, max(valid_vals))
+        colour = COLOURS.get(k, "#000000")
 
-        # 4. Annotate "Drop Points" for the Threat-Based step-functions
-        # (We only do this for Threat-Based to avoid cluttering the noisy EXPO charts)
-        if "Threat" in title_label:
+        ax.plot(x_months, y_vals, color=colour, linewidth=2.2,
+                label=f"{k}-Bit Advice", alpha=0.92, zorder=4)
+
+        finite_vals = [v for v in y_vals if math.isfinite(v)]
+        all_vals.extend(finite_vals)
+
+        # Annotate drop points (only for threat-based step functions)
+        if annotate_drops:
             for i in range(1, len(y_vals)):
-                # If the CR drops significantly (Oracle saw a new peak)
-                if y_vals[i-1] - y_vals[i] > 0.02:
-                    ax.scatter(x_months[i], y_vals[i], color=line_color, 
-                               s=80, marker='v', zorder=5)
+                if math.isfinite(y_vals[i-1]) and math.isfinite(y_vals[i]):
+                    if y_vals[i-1] - y_vals[i] > 0.05:   # significant drop
+                        ax.scatter(x_months[i], y_vals[i], color=colour,
+                                   s=70, marker="v", zorder=5)
 
-    # 5. Bigger Fonts for Axes Labels and Titles
-    ax.set_xlabel("Oracle Data Fed (Months)", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Final Expected Competitive Ratio (Full 5 Years)", fontsize=14, fontweight="bold")
-    ax.set_title(title_label, fontsize=16, fontweight="bold", pad=15)
-    
-    # Increase tick label size for readability
-    ax.tick_params(axis='both', which='major', labelsize=12)
-    
-    # Clean up legend
-    ax.legend(loc="upper right", fontsize=11, framealpha=0.95, edgecolor="#ccc")
+    # ── Axis labels and formatting ────────────────────────────────────────────
+    ax.set_xlabel("Oracle Data Fed (Months)", fontsize=14, fontweight="bold", labelpad=10)
+    ax.set_ylabel("Final Expected Competitive Ratio (Full 5 Years)",
+                  fontsize=14, fontweight="bold", labelpad=10)
+    ax.set_title(title, fontsize=15, fontweight="bold", pad=15)
+    ax.tick_params(axis="both", which="major", labelsize=12)
+
+    ax.legend(loc="upper right", fontsize=11, framealpha=0.95,
+              edgecolor="#cccccc", borderpad=0.8)
     ax.grid(True, alpha=0.3, linestyle="--")
-    
+
     ax.set_xticks(np.arange(0, 61, 6))
     ax.set_xlim(1, 60)
 
-    # Apply the dynamic Y-axis fix, capping the top with 5% padding so nothing is cut off
-    upper_limit = max_plotted_val * 1.05
-    ax.set_ylim(bottom=0.98, top=upper_limit)
+    # Dynamic y-axis: show from just below OPT to just above the max value
+    finite_all = [v for v in all_vals if math.isfinite(v)]
+    y_top = max(finite_all) * 1.06 if finite_all else baseline_cr * 1.1
+    y_bot = max(0.97, min(finite_all) * 0.97) if finite_all else 0.97
+    ax.set_ylim(bottom=y_bot, top=y_top)
 
     plt.tight_layout(pad=2.0)
-    plt.savefig(os.path.join(CHART_DIR, filename), dpi=150, bbox_inches="tight")
+    path = os.path.join(CHART_DIR, filename)
+    plt.savefig(path, dpi=150, bbox_inches="tight", facecolor="#f8f9fa")
     plt.close()
+    print(f"    → Saved: {path}")
+
 
 # =============================================================================
-# Main Simulation
+# Simulation core
 # =============================================================================
 
 def run_restricted_simulation(df, price_col, k_bits_list, name, prefix):
-    prices = df[price_col].values
-    total_days = len(prices)
+    df_5yr  = get_5yr_slice(df, price_col)
+    prices  = df_5yr[price_col].values
+    n       = len(prices)
     global_m = float(np.min(prices))
     global_M = float(np.max(prices))
     opt_cash = global_M * 100.0
-
-    print(f"\n{'='*80}")
-    print(f"  ORACLE ROBUSTNESS TEST: {name}")
-    print(f"{'='*80}")
-    print(f"  Total Days: {total_days}  |  Global m: ${global_m:.2f}  |  Global M: ${global_M:.2f}")
-
-    # ── 1. Calculate Baselines (0-Bit) ──
-    # Threat Baseline
-    threat_baseline = BaseThreatTrader(n=total_days, m=global_m, M=global_M)
-    for i, p in enumerate(prices):
-        threat_baseline.trade(float(p), i + 1, "")
-    threat_baseline_cr = opt_cash / threat_baseline.cash if threat_baseline.cash > 0 else float('inf')
-
-    # EXPO Baseline (1000 Runs for stability)
-    expo_baseline_cashes = []
-    for _ in range(1000):
-        expo = RandomizedExpoTrader(m=global_m, M=global_M, n=total_days, k_bits=0)
-        for i, p in enumerate(prices):
-            expo.trade(float(p), i + 1, "")
-        expo_baseline_cashes.append(expo.cash)
-    expo_baseline_cr = opt_cash / np.mean(expo_baseline_cashes)
-
-    print(f"  [+] Threat 0-Bit Baseline CR: {threat_baseline_cr:.4f}")
-    print(f"  [+] EXPO 0-Bit Baseline CR:   {expo_baseline_cr:.4f}")
-
-    # ── 2. Setup the Monthly Sliding Window ──
     total_months = 60
-    days_per_month = total_days / total_months
-    x_months = np.arange(1, total_months + 1)
-    
-    threat_results = {k: [] for k in k_bits_list}
-    expo_results = {k: [] for k in k_bits_list}
 
-    # ── 3. Run the Restricted Scenarios ──
-    print("  [+] Running restricted oracle scenarios (This will take a moment)...")
-    
+    print(f"\n{'='*75}")
+    print(f"  ORACLE ROBUSTNESS: {name}")
+    print(f"{'='*75}")
+    print(f"  Days={n}  |  m=${global_m:.2f}  |  M=${global_M:.2f}  |  M/m={global_M/global_m:.3f}")
+
+    # ── Baselines (0-bit, no advice) ──────────────────────────────────────────
+    try:
+        tb = BaseThreatTrader(n=n, m=global_m, M=global_M)
+        for i, p in enumerate(prices):
+            tb.trade(float(p), i + 1, "")
+        threat_baseline_cr = opt_cash / tb.cash if tb.cash > 1e-9 else float("inf")
+    except Exception as e:
+        print(f"  [!] Threat baseline failed: {e}")
+        threat_baseline_cr = float("inf")
+
+    rng = np.random.default_rng(EXPO_SEED)
+    expo_cashes = []
+    for _ in range(EXPO_RUNS):
+        try:
+            et = RandomizedExpoTrader(m=global_m, M=global_M, n=n, k_bits=0, rng=rng)
+            for i, p in enumerate(prices):
+                et.trade(float(p), i + 1, "")
+            expo_cashes.append(et.cash)
+        except Exception:
+            pass
+    expo_baseline_cr = (opt_cash / np.mean(expo_cashes)
+                        if expo_cashes else float("inf"))
+
+    print(f"  Threat 0-bit baseline CR : {threat_baseline_cr:.4f}")
+    print(f"  EXPO  0-bit baseline CR  : {expo_baseline_cr:.4f}")
+    print(f"  Running {total_months} monthly windows × {len(k_bits_list)} k-bit levels...")
+
+    # ── Monthly sweep ─────────────────────────────────────────────────────────
+    x_months      = np.arange(1, total_months + 1)
+    threat_results = {k: [] for k in k_bits_list}
+    expo_results   = {k: [] for k in k_bits_list}
+
     for month in x_months:
-        window_size = int(math.ceil(month * days_per_month))
-        window_size = min(window_size, total_days)
-        
-        # Oracle finds max price ONLY in this window
-        restricted_prices = prices[:window_size]
-        restricted_max = float(np.max(restricted_prices))
-        
+        window = month_window_size(month, n, total_months)
+        restricted_max = float(np.max(prices[:window]))
+
         for k in k_bits_list:
             idx = oracle_advice_index(restricted_max, global_m, global_M, k)
-            
-            # --- Threat-Based Test ---
-            t_trader = KBitThreatTrader(n=total_days, m=global_m, M=global_M, k_bits=k, advice_index=idx)
-            for i, p in enumerate(prices):
-                t_trader.trade(float(p), i + 1, "")
-            t_cr = opt_cash / t_trader.cash if t_trader.cash > 0 else float('inf')
+
+            # -- Threat-based --
+            try:
+                tt = KBitThreatTrader(n=n, m=global_m, M=global_M,
+                                      k_bits=k, advice_index=idx)
+                for i, p in enumerate(prices):
+                    tt.trade(float(p), i + 1, "")
+                t_cr = opt_cash / tt.cash if tt.cash > 1e-9 else float("inf")
+            except Exception:
+                t_cr = threat_baseline_cr   # fallback to baseline on error
             threat_results[k].append(t_cr)
 
-            # --- EXPO Test (100 Runs per month-slice for speed/stability balance) ---
+            # -- Randomized EXPO (Monte Carlo average) --
+            rng_k = np.random.default_rng(EXPO_SEED + month * 100 + k)
             e_cashes = []
-            for _ in range(1000):
-                e_trader = RandomizedExpoTrader(m=global_m, M=global_M, n=total_days, k_bits=k, advice_index=idx)
-                for i, p in enumerate(prices):
-                    e_trader.trade(float(p), i + 1, "")
-                e_cashes.append(e_trader.cash)
-            e_cr = opt_cash / np.mean(e_cashes) if np.mean(e_cashes) > 0 else float('inf')
+            for _ in range(EXPO_RUNS):
+                try:
+                    et = RandomizedExpoTrader(m=global_m, M=global_M, n=n,
+                                             k_bits=k, advice_index=idx,
+                                             rng=rng_k)
+                    for i, p in enumerate(prices):
+                        et.trade(float(p), i + 1, "")
+                    e_cashes.append(et.cash)
+                except Exception:
+                    pass
+            e_cr = (opt_cash / np.mean(e_cashes)
+                    if e_cashes else float("inf"))
             expo_results[k].append(e_cr)
 
-    # ── 4. Plot the Results ──
-    print(f"  [+] Generating Threat robustness chart...")
-    plot_robustness_chart(x_months, threat_baseline_cr, threat_results, k_bits_list,
-                          f"Oracle Robustness: Threat-Based Trading\n{name} — 5 Year Timeline",
-                          f"robustness_{prefix}_threat_5yr.png")
+        if month % 10 == 0:
+            print(f"    Month {month:2d}/60 done")
 
-    print(f"  [+] Generating EXPO robustness chart...")
-    plot_robustness_chart(x_months, expo_baseline_cr, expo_results, k_bits_list,
-                          f"Oracle Robustness: Randomized EXPO\n{name} — 5 Year Timeline",
-                          f"robustness_{prefix}_expo_5yr.png")
+    # ── Crossover Report ─────────────────────────────────────────────────────
+    # For each algorithm type and each k-bit level, find:
+    #   1. The FIRST month where CR drops below the baseline (crossover point)
+    #   2. Whether it stays below baseline consistently after that
+    #   3. The final CR at month 60 and improvement over baseline
 
-    print(f"  [✔] Charts successfully saved to ./{CHART_DIR}/\n")
+    def print_crossover_report(results, baseline_cr, algo_label):
+        print(f"\n  {'─'*70}")
+        print(f"  {algo_label} — Crossover Report  (baseline CR = {baseline_cr:.4f})")
+        print(f"  {'─'*70}")
+        print(f"  {'k-bits':>8} │ {'First beats':>12} │ {'Stays below':>12} │ "
+              f"{'Final CR':>9} │ {'Improvement':>12} │ {'Min CR':>8}")
+        print(f"  {'─'*70}")
 
+        for k in k_bits_list:
+            y_vals = results[k]
+
+            # First month where CR < baseline
+            first_beat = None
+            for i, cr in enumerate(y_vals):
+                if math.isfinite(cr) and cr < baseline_cr:
+                    first_beat = int(x_months[i])
+                    break
+
+            # "Stays below" — first month after which CR is consistently
+            # below baseline for the rest of the timeline
+            stays_below = None
+            if first_beat is not None:
+                for i in range(len(y_vals)):
+                    if all(
+                        math.isfinite(y_vals[j]) and y_vals[j] < baseline_cr
+                        for j in range(i, len(y_vals))
+                    ):
+                        stays_below = int(x_months[i])
+                        break
+
+            final_cr = y_vals[-1] if math.isfinite(y_vals[-1]) else float("inf")
+            min_cr   = min((v for v in y_vals if math.isfinite(v)), default=float("inf"))
+
+            if math.isfinite(final_cr) and math.isfinite(baseline_cr):
+                improvement = (baseline_cr - final_cr) / baseline_cr * 100
+                improve_str = f"{improvement:+.2f}%"
+            else:
+                improve_str = "N/A"
+
+            first_str  = f"Month {first_beat}"  if first_beat  is not None else "Never"
+            stays_str  = f"Month {stays_below}" if stays_below is not None else "Never"
+
+            print(f"  {k:>8}-bit │ {first_str:>12} │ {stays_str:>12} │ "
+                  f"{final_cr:>9.4f} │ {improve_str:>12} │ {min_cr:>8.4f}")
+
+    print_crossover_report(threat_results, threat_baseline_cr, "Threat-Based")
+    print_crossover_report(expo_results,   expo_baseline_cr,   "Randomized EXPO")
+    print()
+
+    # ── Charts ────────────────────────────────────────────────────────────────
+    print("  Generating charts...")
+
+    plot_robustness_chart(
+        x_months, threat_baseline_cr, threat_results, k_bits_list,
+        title=f"Oracle Robustness: Threat-Based Trading\n{name} — 5 Year Timeline",
+        filename=f"robustness_{prefix}_threat_5yr.png",
+        annotate_drops=True,
+    )
+
+    plot_robustness_chart(
+        x_months, expo_baseline_cr, expo_results, k_bits_list,
+        title=f"Oracle Robustness: Randomized EXPO\n{name} — 5 Year Timeline",
+        filename=f"robustness_{prefix}_expo_5yr.png",
+        annotate_drops=False,
+    )
+
+    print(f"  Done.\n")
+
+
+# =============================================================================
+# Main
+# =============================================================================
 
 if __name__ == "__main__":
     K_BITS = [1, 2, 3, 4, 8]
-    
-    # ── Define all your datasets here ──
+
     DATASETS = [
         {
-            "file": "HistoricalData_1773022846406.csv",
+            "file":      "HistoricalData_1773022846406.csv",
             "price_col": "Close/Last",
-            "name": "Apple Stock",
-            "prefix": "apple"
+            "name":      "Apple Stock",
+            "prefix":    "apple",
         },
         {
-            "file": "USD_PHP.csv",
-            "price_col": "Close/Last", 
-            "name": "USD -> PHP",
-            "prefix": "usd_php"
-        }
+            "file":      "USD_PHP.csv",
+            "price_col": "Close/Last",
+            "name":      "USD → PHP",
+            "prefix":    "usd_php",
+        },
+        {
+            "file":      "Bitcoin.csv",
+            "price_col": "Close/Last",
+            "name":      "Bitcoin",
+            "prefix":    "bitcoin",
+        },
+        {
+            "file":      "Meta.csv",
+            "price_col": "Close/Last",
+            "name":      "Meta",
+            "prefix":    "meta",
+        },
     ]
 
     for ds in DATASETS:
-        df = prepare_df(ds['file'], ds['price_col'])
+        df = prepare_df(ds["file"], ds["price_col"])
         if df is not None:
-            # Make sure we only use the first 5 years of data (~1302 days) to match your previous tests
-            df_5yr = df.head(1302).reset_index(drop=True) 
-            run_restricted_simulation(df_5yr, ds['price_col'], K_BITS, ds['name'], ds['prefix'])
+            run_restricted_simulation(
+                df, ds["price_col"], K_BITS, ds["name"], ds["prefix"]
+            )
+        else:
+            print(f"  Skipping {ds['name']} — could not load data.")
